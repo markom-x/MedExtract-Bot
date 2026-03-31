@@ -158,12 +158,13 @@ export function ChatSection({
 
     channel.subscribe((status, err) => {
       if (status === "SUBSCRIBED") return;
-      if (
-        status === "CHANNEL_ERROR" ||
-        status === "TIMED_OUT" ||
-        status === "CLOSED"
-      ) {
+      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
         console.error("[Realtime richieste INSERT]", status, err);
+        return;
+      }
+      if (status === "CLOSED") {
+        // In dev può succedere durante remount/cleanup React Strict Mode.
+        console.info("[Realtime richieste INSERT]", status);
       }
     });
 
