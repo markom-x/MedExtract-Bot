@@ -1,11 +1,17 @@
 import type { NextConfig } from "next";
 
+const localTurbopackConfig: Pick<NextConfig, "turbopack"> =
+  process.env.VERCEL === "1"
+    ? {}
+    : {
+        turbopack: {
+          // Solo in locale: evita che Turbopack risolva moduli dalla cartella utente.
+          root: process.cwd(),
+        },
+      };
+
 const nextConfig: NextConfig = {
-  turbopack: {
-    // Forza la root del progetto Next al CWD del comando (`web-app`).
-    // Evita che Turbopack risolva moduli dalla cartella padre.
-    root: process.cwd(),
-  },
+  ...localTurbopackConfig,
   images: {
     remotePatterns: [
       {
