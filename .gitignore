@@ -23,3 +23,7 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+
+# Non ignorare il codice frontend in web-app/lib (serve per import alias @/lib/*)
+!web-app/lib/
+!web-app/lib/**

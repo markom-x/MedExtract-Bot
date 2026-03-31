@@ -1,0 +1,92 @@
+import type { PatientProfile, PazienteNested, RichiestaRow } from "./types";
+import { cleanPhone, needsAttention, patientDisplayName } from "./format";
+
+export type PatientBucket = {
+  profile: PatientProfile;
+  requests: RichiestaRow[];
+};
+
+function normalizePaziente(
+  row: RichiestaRow
+): PazienteNested | null {
+  const p = row.pazienti;
+  if (!p) return null;
+  if (Array.isArray(p)) return p[0] ?? null;
+  return p;
+}
+
+export function groupRichiesteByPatient(rows: RichiestaRow[]): Map<string, PatientBucket> {
+  const map = new Map<string, PatientBucket>();
+
+  for (const row of rows) {
+    const paziente = normalizePaziente(row);
+    if (!paziente || paziente.id == null) continue;
+    const pazienteId = paziente.id;
+
+    const phoneClean = cleanPhone(paziente.telefono);
+    const nomeDisplay = patientDisplayName(paziente.nome, phoneClean);
+
+    const existing = map.get(pazienteId);
+    if (!existing) {
+      map.set(pazienteId, {
+        profile: {
+          id: pazienteId,
+          nomeRaw: paziente.nome,
+          nomeDisplay,
+          telefono: phoneClean,
+          notePrivate: paziente.note_private ?? null,
+        },
+        requests: [row],
+      });
+    } else {
+      existing.requests.push(row);
+      const np = paziente.note_private;
+      if (np != null && String(np).length > 0) {
+        existing.profile.notePrivate = np;
+      }
+    }
+  }
+
+  return map;
+}
+
+export function sortPatientIds(
+  buckets: Map<string, PatientBucket>
+): string[] {
+  return [...buckets.keys()].sort((a, b) => {
+    const ba = buckets.get(a)!;
+    const bb = buckets.get(b)!;
+    const pa = needsAttention(ba.requests) ? 0 : 1;
+    const pb = needsAttention(bb.requests) ? 0 : 1;
+    if (pa !== pb) return pa - pb;
+    if (bb.requests.length !== ba.requests.length) {
+      return bb.requests.length - ba.requests.length;
+    }
+    return ba.profile.nomeDisplay.localeCompare(bb.profile.nomeDisplay, "it", {
+      sensitivity: "base",
+    });
+  });
+}
+
+export function lastMessagePreview(requests: RichiestaRow[]): string {
+  const sorted = [...requests].sort(
+    (x, y) =>
+      new Date(y.created_at).getTime() - new Date(x.created_at).getTime()
+  );
+  const raw = sorted[0]?.messaggio_originale?.trim();
+  if (!raw) return "Nessun messaggio";
+  const max = 72;
+  return raw.length > max ? `${raw.slice(0, max)}…` : raw;
+}
+
+export function latestClinicalSummary(requests: RichiestaRow[]): string | null {
+  const sorted = [...requests].sort(
+    (x, y) =>
+      new Date(y.created_at).getTime() - new Date(x.created_at).getTime()
+  );
+  for (const r of sorted) {
+    const s = r.riassunto_clinico?.trim();
+    if (s) return s;
+  }
+  return null;
+}
