@@ -1,40 +1,48 @@
 import Link from "next/link";
-import { Brain, MessageSquare, ShieldCheck } from "lucide-react";
+import { Activity, BrainCircuit, MessageCircle, ShieldCheck } from "lucide-react";
 
 export default function Home() {
   return (
-    <main className="min-h-dvh bg-slate-50 text-slate-900">
-      <header className="border-b border-slate-200 bg-white/90 backdrop-blur">
+    <main className="min-h-dvh bg-white text-slate-800">
+      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur">
         <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-4 py-3 md:px-6">
-          <Link href="/" className="text-lg font-semibold tracking-tight text-blue-700">
+          <Link
+            href="/"
+            className="inline-flex items-center gap-2 text-lg font-bold tracking-tight text-slate-900"
+          >
+            <span className="rounded-lg bg-blue-50 p-1.5 text-blue-600">
+              <Activity className="size-4" />
+            </span>
             MedFlow
           </Link>
           <Link
             href="/login"
-            className="rounded-lg border border-blue-200 bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700"
+            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
           >
-            Accedi
+            Area Medici
           </Link>
         </div>
       </header>
 
-      <section className="mx-auto w-full max-w-6xl px-4 pb-10 pt-12 md:px-6 md:pb-16 md:pt-20">
+      <section className="mx-auto w-full max-w-6xl px-4 pb-10 pt-14 md:px-6 md:pb-16 md:pt-24">
         <div className="max-w-3xl">
-          <p className="inline-flex items-center rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-cyan-700">
-            Startup MedTech
-          </p>
-          <h1 className="mt-4 text-3xl font-bold leading-tight tracking-tight text-slate-900 md:text-5xl">
-            Il tuo assistente di Triage intelligente su WhatsApp
+          <h1 className="text-4xl font-bold leading-tight tracking-tight text-slate-900 md:text-6xl">
+            Il Triage AI per il Medico Moderno.
           </h1>
-          <p className="mt-4 text-base leading-relaxed text-slate-600 md:text-lg">
-            MedFlow usa l&apos;IA per leggere i messaggi dei pazienti, estrarre i dati clinici e
-            organizzare le priorita&apos; in una dashboard chiara. Meno caos operativo, piu&apos;
-            tempo clinico per il medico.
+          <p className="mt-5 text-base leading-relaxed text-slate-600 md:text-xl">
+            Trasforma i messaggi WhatsApp dei tuoi pazienti in schede cliniche strutturate.
+            Risparmia ore di lavoro ogni giorno, in totale sicurezza.
           </p>
-          <div className="mt-6">
+          <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center">
+            <Link
+              href="/login"
+              className="inline-flex items-center justify-center rounded-lg bg-teal-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-teal-700"
+            >
+              Inizia la Prova
+            </Link>
             <a
               href="#features"
-              className="inline-flex rounded-lg bg-cyan-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-cyan-700"
+              className="inline-flex items-center justify-center rounded-lg border border-slate-300 px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
             >
               Scopri come funziona
             </a>
@@ -44,45 +52,44 @@ export default function Home() {
 
       <section id="features" className="mx-auto w-full max-w-6xl px-4 pb-14 md:px-6 md:pb-20">
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3 md:gap-6">
-          <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="mb-3 inline-flex rounded-xl bg-blue-50 p-2 text-blue-700">
-              <MessageSquare className="size-5" />
+          <article className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="mb-4 inline-flex rounded-xl bg-blue-50 p-2.5 text-blue-600">
+              <MessageCircle className="size-5" />
             </div>
-            <h2 className="text-lg font-semibold text-slate-900">Integrazione WhatsApp</h2>
+            <h2 className="text-lg font-semibold text-slate-900">Nessuna App da scaricare</h2>
             <p className="mt-2 text-sm leading-relaxed text-slate-600">
-              Ricevi e centralizza i messaggi paziente in tempo reale, senza cambiare le abitudini
-              di comunicazione dello studio.
+              I pazienti ti scrivono sul tuo assistente virtuale WhatsApp. Nessuna frizione,
+              massima accessibilita&apos;.
             </p>
           </article>
 
-          <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="mb-3 inline-flex rounded-xl bg-cyan-50 p-2 text-cyan-700">
-              <Brain className="size-5" />
+          <article className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="mb-4 inline-flex rounded-xl bg-teal-50 p-2.5 text-teal-600">
+              <BrainCircuit className="size-5" />
             </div>
-            <h2 className="text-lg font-semibold text-slate-900">Estrazione Dati Clinici</h2>
+            <h2 className="text-lg font-semibold text-slate-900">Estrazione Dati AI</h2>
             <p className="mt-2 text-sm leading-relaxed text-slate-600">
-              L&apos;IA sintetizza sintomi, red flags e livello di urgenza in JSON strutturato per
-              accelerare il triage quotidiano.
+              Il nostro motore clinico legge i messaggi e genera schede di triage con livelli di
+              urgenza e red flags.
             </p>
           </article>
 
-          <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="mb-3 inline-flex rounded-xl bg-emerald-50 p-2 text-emerald-700">
+          <article className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="mb-4 inline-flex rounded-xl bg-blue-50 p-2.5 text-blue-600">
               <ShieldCheck className="size-5" />
             </div>
-            <h2 className="text-lg font-semibold text-slate-900">Privacy e RLS Sicura</h2>
+            <h2 className="text-lg font-semibold text-slate-900">Privacy Garantita</h2>
             <p className="mt-2 text-sm leading-relaxed text-slate-600">
-              Accesso protetto, policy RLS e separazione dei ruoli per mantenere i dati sanitari
-              al sicuro in ogni passaggio.
+              Architettura Multi-tenant con Row Level Security. I tuoi dati e quelli dei tuoi
+              pazienti sono blindati.
             </p>
           </article>
         </div>
       </section>
 
-      <footer className="border-t border-slate-200 bg-white">
-        <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-4 py-4 text-xs text-slate-500 md:px-6">
-          <p>© {new Date().getFullYear()} MedFlow</p>
-          <p>Triage intelligente per Medicina Generale</p>
+      <footer className="border-t border-slate-200 bg-slate-50">
+        <div className="mx-auto w-full max-w-6xl px-4 py-4 text-center text-xs text-slate-500 md:px-6">
+          © 2024 MedFlow. Progetto per Hackathon HSIL.
         </div>
       </footer>
     </main>
