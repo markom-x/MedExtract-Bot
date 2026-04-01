@@ -89,7 +89,7 @@ export default function Home() {
 
       <footer className="border-t border-slate-200 bg-slate-50">
         <div className="mx-auto w-full max-w-6xl px-4 py-4 text-center text-xs text-slate-500 md:px-6">
-          © 2024 MedFlow. Progetto per Hackathon HSIL.
+          © 2026 MedFlow. Progettato da Marco Carbone.
         </div>
       </footer>
     </main>
