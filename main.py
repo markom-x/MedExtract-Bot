@@ -1,3 +1,4 @@
+import base64
 import json
 import mimetypes
 import os
@@ -5,12 +6,13 @@ import re
 import secrets
 import tempfile
 import time
+import traceback
 from pathlib import Path
 from urllib.parse import unquote
 
 import requests
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, FastAPI, Form
+from fastapi import FastAPI, Form
 from fastapi.responses import Response
 from openai import OpenAI
 from supabase import Client, create_client
@@ -27,11 +29,49 @@ openai_api_key = os.getenv("OPENAI_API_KEY")
 openai_client = OpenAI(api_key=openai_api_key) if openai_api_key else None
 
 supabase_url = os.getenv("SUPABASE_URL")
-# Backend-only: usa la service role key per bypass RLS sugli insert server-side.
+# Backend-only: OBBLIGATORIO service role per INSERT/Storage (bypass RLS). No anon key.
 supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
 supabase: Client | None = (
     create_client(supabase_url, supabase_key) if supabase_url and supabase_key else None
 )
+
+
+def _jwt_role_hint(key: str | None) -> str:
+    """Legge il claim `role` dal JWT Supabase senza validare la firma (solo diagnostica log)."""
+    if not key or "." not in key:
+        return "sconosciuto"
+    try:
+        payload_b64 = key.split(".")[1]
+        payload_b64 += "=" * (-len(payload_b64) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+        return str(payload.get("role", "mancante"))
+    except Exception:
+        return "non_decodificabile"
+
+
+@app.on_event("startup")
+def _log_startup_config() -> None:
+    print("[startup] FastAPI avviato.", flush=True)
+    if openai_client and openai_api_key:
+        print("[startup] OpenAI client: OK (chiave presente).", flush=True)
+    else:
+        print("[startup] OpenAI client: NON configurato (OPENAI_API_KEY).", flush=True)
+    if supabase and supabase_url and supabase_key:
+        role = _jwt_role_hint(supabase_key)
+        src = "SUPABASE_SERVICE_ROLE_KEY" if os.getenv("SUPABASE_SERVICE_ROLE_KEY") else "SUPABASE_KEY"
+        print(f"[startup] Supabase client: OK (URL presente, chiave da {src}).", flush=True)
+        print(f"[startup] JWT role hint (diagnostica): {role}", flush=True)
+        if role not in ("service_role",):
+            print(
+                "[startup] ATTENZIONE: usa SUPABASE_SERVICE_ROLE_KEY dal pannello Supabase "
+                "(Settings → API → service_role). Con chiave anon le INSERT falliscono per RLS.",
+                flush=True,
+            )
+    else:
+        print(
+            "[startup] Supabase: NON configurato (servono SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY).",
+            flush=True,
+        )
 
 SYSTEM_PROMPT = """
 Sei un infermiere di triage esperto che assiste un Medico di Medicina Generale.
@@ -109,7 +149,9 @@ def extract_fields_with_openai(message: str, from_number: str) -> dict:
             ],
         )
     except Exception as e:
-        raise
+        print(f"ERRORE: OpenAI chat.completions (triage): {e}", flush=True)
+        traceback.print_exc()
+        return _default_triage_output()
 
     content = resp.choices[0].message.content or "{}"
     try:
@@ -182,27 +224,39 @@ def super_riassunto_vocale(transcript: str, from_number: str) -> str:
 
 def get_or_create_paziente(from_number: str) -> int | None:
     if not supabase:
-        print("ERRORE: Supabase non configurato (SUPABASE_URL/SUPABASE_KEY).")
+        print("ERRORE: Supabase non configurato (SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY).", flush=True)
         return None
 
-    existing = (
-        supabase.table("pazienti")
-        .select("id")
-        .eq("telefono", from_number)
-        .limit(1)
-        .execute()
-    )
-    if existing.data:
-        return existing.data[0]["id"]
+    try:
+        print("[DB] Ricerca paziente per telefono…", flush=True)
+        existing = (
+            supabase.table("pazienti")
+            .select("id")
+            .eq("telefono", from_number)
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            pid = existing.data[0]["id"]
+            print(f"[DB] Paziente esistente id={pid}", flush=True)
+            return pid
 
-    created = (
-        supabase.table("pazienti")
-        .insert({"telefono": from_number})
-        .execute()
-    )
-    if not created.data:
+        print("[DB] Nessun paziente: inizio INSERT pazienti…", flush=True)
+        created = (
+            supabase.table("pazienti")
+            .insert({"telefono": from_number})
+            .execute()
+        )
+        if not created.data:
+            print("ERRORE: INSERT pazienti senza data in risposta.", flush=True)
+            return None
+        pid = created.data[0]["id"]
+        print(f"[DB] Paziente creato id={pid}", flush=True)
+        return pid
+    except Exception as e:
+        print(f"ERRORE: Supabase get_or_create_paziente: {e}", flush=True)
+        traceback.print_exc()
         return None
-    return created.data[0]["id"]
 
 
 def insert_richiesta(
@@ -213,7 +267,7 @@ def insert_richiesta(
     url_media: str | None,
 ) -> None:
     if not supabase:
-        print("ERRORE: Supabase non configurato (SUPABASE_URL/SUPABASE_KEY).")
+        print("ERRORE: Supabase non configurato (SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY).", flush=True)
         return
 
     payload = {
@@ -224,8 +278,14 @@ def insert_richiesta(
         "urgenza": urgenza,
         "url_media": url_media,
     }
-    supabase.table("richieste").insert(payload).execute()
-    print("SALVATAGGIO SUPABASE OK: nuova richiesta inserita.")
+    try:
+        print("[DB] Inizio salvataggio tabella richieste…", flush=True)
+        result = supabase.table("richieste").insert(payload).execute()
+        print(f"[DB] Salvataggio richieste completato. Righe: {len(result.data or [])}", flush=True)
+        print("SALVATAGGIO SUPABASE OK: nuova richiesta inserita.", flush=True)
+    except Exception as e:
+        print(f"ERRORE: Supabase insert_richiesta: {e}", flush=True)
+        traceback.print_exc()
 
 
 def _extension_from_content_type(content_type: str) -> str:
@@ -433,6 +493,34 @@ def process_message(
     media_content_type_0: str = "",
     message_sid: str = "",
 ) -> None:
+    """
+    Elaborazione sincrona (no BackgroundTasks): su Render i task in background
+    possono essere troncati allo shutdown del worker subito dopo il 200 OK.
+    """
+    print("[process_message] === INIZIO (sincrono) ===", flush=True)
+    try:
+        _process_message_impl(
+            from_number,
+            body,
+            num_media,
+            media_url_0,
+            media_content_type_0,
+            message_sid,
+        )
+        print("[process_message] === FINE OK ===", flush=True)
+    except Exception as e:
+        print(f"ERRORE: process_message fatale: {e}", flush=True)
+        traceback.print_exc()
+
+
+def _process_message_impl(
+    from_number: str,
+    body: str,
+    num_media: int = 0,
+    media_url_0: str = "",
+    media_content_type_0: str = "",
+    message_sid: str = "",
+) -> None:
     message_text = body.strip() if body else ""
     uploaded_media_url = None
     media_url_clean = (media_url_0 or "").strip()
@@ -487,35 +575,30 @@ def process_message(
                 except Exception as e:
                     print(f"ERRORE upload media referti: {e}")
 
-    try:
-        extracted = extract_fields_with_openai(message_text, from_number)
-    except Exception as e:
-        print(f"ERRORE estrazione OpenAI: {e}")
+    print("[OpenAI] Inizio estrazione triage (GPT)…", flush=True)
+    extracted = extract_fields_with_openai(message_text, from_number)
+    print("[OpenAI] Estrazione triage completata.", flush=True)
+    print("ESTRAZIONE GPT-4O-MINI (JSON)", flush=True)
+    print(json.dumps(extracted, indent=2), flush=True)
+
+    print("[DB] Inizio get_or_create_paziente + insert_richiesta…", flush=True)
+    paziente_id = get_or_create_paziente(from_number)
+    if paziente_id is None:
+        print("ERRORE: impossibile trovare/creare il paziente su Supabase.", flush=True)
         return
 
-    print("ESTRAZIONE GPT-4O-MINI (JSON)")
-    print(json.dumps(extracted, indent=2))
-
-    try:
-        paziente_id = get_or_create_paziente(from_number)
-        if paziente_id is None:
-            print("ERRORE: impossibile trovare/creare il paziente su Supabase.")
-            return
-
-        insert_richiesta(
-            paziente_id=paziente_id,
-            messaggio_originale=message_text,
-            riassunto_clinico=extracted.get("riassunto_clinico"),
-            urgenza=extracted.get("urgenza_db"),
-            url_media=uploaded_media_url,
-        )
-    except Exception as e:
-        print(f"ERRORE Supabase: {e}")
+    insert_richiesta(
+        paziente_id=paziente_id,
+        messaggio_originale=message_text,
+        riassunto_clinico=extracted.get("riassunto_clinico"),
+        urgenza=extracted.get("urgenza_db"),
+        url_media=uploaded_media_url,
+    )
+    print("[DB] Flusso salvataggio richieste terminato.", flush=True)
 
 
 @app.post("/webhook")
 def twilio_webhook(
-    background_tasks: BackgroundTasks,
     From: str = Form(...),
     Body: str = Form(default=""),
     NumMedia: int = Form(default=0),
@@ -525,24 +608,23 @@ def twilio_webhook(
 ) -> Response:
     print("🚨 RICEVUTO MESSAGGIO DA TWILIO! 🚨", flush=True)
     # Riceve il POST da Twilio (application/x-www-form-urlencoded).
-    # Rispondiamo subito con TwiML vuoto e processiamo OpenAI + Supabase in BackgroundTasks
-    # (endpoint sync per non bloccare l'event loop con SDK bloccanti).
+    # OpenAI + Supabase in modo SINCRONO: su Render i BackgroundTasks spesso non completano
+    # prima dello shutdown del worker dopo la risposta HTTP.
     separator = "=" * 72
-    print(f"\n{separator}")
-    print("TWILIO WEBHOOK — NUOVO MESSAGGIO")
-    print(separator)
-    print(f"  Mittente (From): {From}")
-    print(f"  Messaggio (Body): {Body}")
-    print(f"  NumMedia: {NumMedia}")
+    print(f"\n{separator}", flush=True)
+    print("TWILIO WEBHOOK — NUOVO MESSAGGIO", flush=True)
+    print(separator, flush=True)
+    print(f"  Mittente (From): {From}", flush=True)
+    print(f"  Messaggio (Body): {Body}", flush=True)
+    print(f"  NumMedia: {NumMedia}", flush=True)
     if NumMedia > 0:
-        print(f"  MediaUrl0: {MediaUrl0}")
-        print(f"  MediaContentType0: {MediaContentType0}")
+        print(f"  MediaUrl0: {MediaUrl0}", flush=True)
+        print(f"  MediaContentType0: {MediaContentType0}", flush=True)
     if MessageSid:
-        print(f"  MessageSid: {MessageSid}")
-    print(f"{separator}\n")
+        print(f"  MessageSid: {MessageSid}", flush=True)
+    print(f"{separator}\n", flush=True)
 
-    background_tasks.add_task(
-        process_message,
+    process_message(
         From,
         Body,
         NumMedia,
@@ -550,6 +632,7 @@ def twilio_webhook(
         MediaContentType0,
         MessageSid,
     )
+    print("[webhook] Risposta TwiML 200 (dopo elaborazione completa).", flush=True)
 
     twiml = "<Response></Response>"
     return Response(content=twiml, media_type="application/xml")
