@@ -27,13 +27,13 @@ function LoginForm() {
     try {
       setSending(true);
       const supabase = getSupabaseAuthBrowserClient();
-      const redirectTarget = new URL("/auth/confirm", window.location.origin);
-      redirectTarget.searchParams.set("next", nextPath);
+      const confirmRedirect = new URL(`${window.location.origin}/auth/confirm`);
+      confirmRedirect.searchParams.set("next", nextPath);
 
       const { error } = await supabase.auth.signInWithOtp({
         email: normalizedEmail,
         options: {
-          emailRedirectTo: redirectTarget.toString(),
+          emailRedirectTo: confirmRedirect.toString(),
         },
       });
 

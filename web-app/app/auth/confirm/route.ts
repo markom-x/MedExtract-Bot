@@ -8,14 +8,14 @@ export async function GET(request: Request) {
   const code = url.searchParams.get("code");
   const tokenHash = url.searchParams.get("token_hash");
   const type = url.searchParams.get("type");
-  const next = url.searchParams.get("next") || "/";
 
-  const redirectTo = new URL(next, url.origin);
   const supabase = await getSupabaseAuthServerClient();
 
   if (code) {
     const { error } = await supabase.auth.exchangeCodeForSession(code);
-    if (!error) return NextResponse.redirect(redirectTo);
+    if (!error) {
+      return NextResponse.redirect(new URL("/dashboard", request.url));
+    }
   }
 
   if (tokenHash && type) {
@@ -23,10 +23,12 @@ export async function GET(request: Request) {
       token_hash: tokenHash,
       type: type as EmailOtpType,
     });
-    if (!error) return NextResponse.redirect(redirectTo);
+    if (!error) {
+      return NextResponse.redirect(new URL("/dashboard", request.url));
+    }
   }
 
-  const loginUrl = new URL("/login", url.origin);
+  const loginUrl = new URL("/login", request.url);
   loginUrl.searchParams.set("error", "link_non_valido_o_scaduto");
   return NextResponse.redirect(loginUrl);
 }
