@@ -15,12 +15,20 @@ export default function Home() {
             </span>
             MedFlow
           </Link>
-          <Link
-            href="/login"
-            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
-          >
-            Area Medici
-          </Link>
+          <div className="flex items-center gap-3">
+            <Link
+              href="/login"
+              className="text-sm font-semibold text-slate-700 transition hover:text-slate-900"
+            >
+              Accedi
+            </Link>
+            <Link
+              href="/login"
+              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
+            >
+              Area Medici
+            </Link>
+          </div>
         </div>
       </header>
 
@@ -40,12 +48,12 @@ export default function Home() {
             >
               Inizia la Prova
             </Link>
-            <a
-              href="#features"
+            <Link
+              href="/#features"
               className="inline-flex items-center justify-center rounded-lg border border-slate-300 px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
             >
               Scopri come funziona
-            </a>
+            </Link>
           </div>
         </div>
       </section>
