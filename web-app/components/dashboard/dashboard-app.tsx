@@ -27,9 +27,12 @@ export function DashboardApp() {
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
 
-  const load = useCallback(async () => {
-    setError(null);
-    setLoading(true);
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = Boolean(opts?.silent);
+    if (!silent) {
+      setError(null);
+      setLoading(true);
+    }
     try {
       const supabase = getSupabaseAuthBrowserClient();
       const rows = await fetchRichieste(supabase);
@@ -40,9 +43,15 @@ export function DashboardApp() {
     } catch (e) {
       const msg =
         e instanceof Error ? e.message : "Errore durante il caricamento.";
-      setError(msg);
+      if (silent) {
+        toast.error(msg);
+      } else {
+        setError(msg);
+      }
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -103,7 +112,7 @@ export function DashboardApp() {
       }
 
       toast.success("Messaggio inviato");
-      await load();
+      await load({ silent: true });
       return true;
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Errore imprevisto.");
@@ -214,7 +223,7 @@ export function DashboardApp() {
           requests={selectedBucket.requests}
           sending={sending}
           onSendMessage={handleSendMessage}
-          onNotesSaved={() => void load()}
+          onNotesSaved={() => void load({ silent: true })}
         />
       ) : (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center overflow-hidden border-t border-slate-200 bg-white md:border-l md:border-t-0">

@@ -216,6 +216,7 @@ export function ChatSection({
       setDraft("");
       setAttachment(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
+      requestAnimationFrame(() => draftInputRef.current?.focus());
     }
   }
 
@@ -227,6 +228,7 @@ export function ChatSection({
         setDraft("");
         setAttachment(null);
         if (fileInputRef.current) fileInputRef.current.value = "";
+        requestAnimationFrame(() => draftInputRef.current?.focus());
       }
       return;
     }
