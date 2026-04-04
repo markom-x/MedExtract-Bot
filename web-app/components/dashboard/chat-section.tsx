@@ -43,6 +43,8 @@ function rowFromRealtimeNew(raw: Record<string, unknown>): RichiestaRow {
     messaggio_originale:
       raw.messaggio_originale != null ? String(raw.messaggio_originale) : null,
     url_media: raw.url_media != null ? String(raw.url_media) : null,
+    paziente_id:
+      raw.paziente_id != null ? String(raw.paziente_id) : null,
     pazienti: null,
   };
 }

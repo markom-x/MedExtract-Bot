@@ -3,7 +3,11 @@
 import type { PostgrestError } from "@supabase/supabase-js";
 import twilio from "twilio";
 
-import { MEDICO_FILE_SENT, MEDICO_MSG_PREFIX } from "@/lib/dashboard/constants";
+import {
+  MEDICO_FILE_SENT,
+  MEDICO_MSG_PREFIX,
+  STUDIO_MEDICO_ID,
+} from "@/lib/dashboard/constants";
 import { getSupabaseServiceRoleClient } from "@/lib/supabase/server";
 
 export type SendDoctorMessageResult =
@@ -88,12 +92,15 @@ export async function sendDoctorMessage(
     riassunto_clinico = "Risposta del medico";
   }
 
+  const medicoId = process.env.MEDICO_STUDIO_ID?.trim() || STUDIO_MEDICO_ID;
+
   try {
     const supabase = getSupabaseServiceRoleClient();
     const { data, error } = await supabase
       .from("richieste")
       .insert({
         paziente_id: input.pazienteId,
+        medico_id: medicoId,
         messaggio_originale,
         riassunto_clinico,
         urgenza: "Bassa",

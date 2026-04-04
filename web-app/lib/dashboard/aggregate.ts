@@ -20,26 +20,48 @@ export function groupRichiesteByPatient(rows: RichiestaRow[]): Map<string, Patie
 
   for (const row of rows) {
     const paziente = normalizePaziente(row);
-    if (!paziente || paziente.id == null) continue;
-    const pazienteId = paziente.id;
+    const pazienteId =
+      (paziente?.id != null ? String(paziente.id) : null) ??
+      (row.paziente_id != null && String(row.paziente_id).trim() !== ""
+        ? String(row.paziente_id)
+        : null);
 
-    const phoneClean = cleanPhone(paziente.telefono);
-    const nomeDisplay = patientDisplayName(paziente.nome, phoneClean);
+    if (!pazienteId) continue;
 
     const existing = map.get(pazienteId);
     if (!existing) {
+      const phoneClean = paziente ? cleanPhone(paziente.telefono) : "—";
+      const nomeDisplay = paziente
+        ? patientDisplayName(paziente.nome, phoneClean)
+        : `Paziente ${pazienteId.slice(0, 8)}…`;
+
       map.set(pazienteId, {
         profile: {
           id: pazienteId,
-          nomeRaw: paziente.nome,
+          nomeRaw: paziente?.nome ?? null,
           nomeDisplay,
           telefono: phoneClean,
-          notePrivate: paziente.note_private ?? null,
+          notePrivate: paziente?.note_private ?? null,
         },
         requests: [row],
       });
-    } else {
-      existing.requests.push(row);
+      continue;
+    }
+
+    existing.requests.push(row);
+
+    if (paziente) {
+      const phoneClean = cleanPhone(paziente.telefono);
+      if (phoneClean && phoneClean !== "—") {
+        existing.profile.telefono = phoneClean;
+      }
+      if (paziente.nome?.trim()) {
+        existing.profile.nomeRaw = paziente.nome;
+        existing.profile.nomeDisplay = patientDisplayName(
+          paziente.nome,
+          phoneClean
+        );
+      }
       const np = paziente.note_private;
       if (np != null && String(np).length > 0) {
         existing.profile.notePrivate = np;

@@ -15,6 +15,8 @@ export type RichiestaRow = {
   riassunto_clinico: string | null;
   messaggio_originale: string | null;
   url_media: string | null;
+  /** FK verso `pazienti` (utile se l'embed `pazienti` è assente ma la riga è leggibile). */
+  paziente_id?: string | null;
   pazienti: PazienteNested | PazienteNested[] | null;
 };
 
