@@ -184,8 +184,8 @@ export function ChatSection({
   );
 
   useEffect(() => {
-    const end = messagesEndRef.current;
-    if (!end) return;
+    const root = messagesContainerRef.current;
+    if (!root) return;
 
     const switchedPatient = scrollPatientIdRef.current !== pazienteId;
     scrollPatientIdRef.current = pazienteId;
@@ -193,7 +193,7 @@ export function ChatSection({
     const behavior: ScrollBehavior = switchedPatient ? "auto" : "smooth";
 
     const scrollToEnd = () => {
-      end.scrollIntoView({ behavior, block: "end" });
+      root.scrollTo({ top: root.scrollHeight, behavior });
     };
 
     scrollToEnd();
@@ -247,7 +247,7 @@ export function ChatSection({
     >
       <div
         ref={messagesContainerRef}
-        className="min-h-0 h-full max-h-full flex-1 space-y-2 overflow-y-auto overscroll-contain px-3 py-3 sm:px-4 sm:py-4 md:space-y-3 md:px-6"
+        className="flex min-h-[400px] max-h-[60vh] flex-1 flex-col space-y-2 overflow-y-auto overscroll-contain p-4 md:space-y-3 md:px-6 md:py-4"
       >
         {chatRows.map((messaggio) => {
           const raw =
