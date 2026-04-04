@@ -77,7 +77,9 @@ export function ChatSection({
   const [attachment, setAttachment] = useState<File | null>(null);
   const [messages, setMessages] = useState<RichiestaRow[]>([]);
   const [realtimeEnterId, setRealtimeEnterId] = useState<string | null>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollPatientIdRef = useRef<string | null>(null);
   const enterClearRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const draftInputRef = useRef<HTMLTextAreaElement>(null);
@@ -176,9 +178,29 @@ export function ChatSection({
 
   const chatRows = useMemo(() => sortByCreatedAt(messages), [messages]);
 
+  const messagesScrollSignature = useMemo(
+    () => chatRows.map((m) => m.id).join(","),
+    [chatRows]
+  );
+
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatRows.length, sending]);
+    const end = messagesEndRef.current;
+    if (!end) return;
+
+    const switchedPatient = scrollPatientIdRef.current !== pazienteId;
+    scrollPatientIdRef.current = pazienteId;
+
+    const behavior: ScrollBehavior = switchedPatient ? "auto" : "smooth";
+
+    const scrollToEnd = () => {
+      end.scrollIntoView({ behavior, block: "end" });
+    };
+
+    scrollToEnd();
+    requestAnimationFrame(() => {
+      requestAnimationFrame(scrollToEnd);
+    });
+  }, [pazienteId, messagesScrollSignature, sending]);
 
   const canSend =
     (draft.trim().length > 0 || attachment !== null) && !sending;
@@ -223,7 +245,10 @@ export function ChatSection({
         className
       )}
     >
-      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-3 sm:px-4 sm:py-4 md:space-y-3 md:px-6">
+      <div
+        ref={messagesContainerRef}
+        className="min-h-0 h-full max-h-full flex-1 space-y-2 overflow-y-auto overscroll-contain px-3 py-3 sm:px-4 sm:py-4 md:space-y-3 md:px-6"
+      >
         {chatRows.map((messaggio) => {
           const raw =
             (messaggio.messaggio_originale ?? "").trim() || "[Messaggio vuoto]";
@@ -313,7 +338,7 @@ export function ChatSection({
             </div>
           );
         })}
-        <div ref={bottomRef} />
+        <div ref={messagesEndRef} aria-hidden className="h-px w-full shrink-0" />
       </div>
 
       <form
