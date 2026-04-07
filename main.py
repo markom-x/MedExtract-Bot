@@ -222,45 +222,114 @@ def super_riassunto_vocale(transcript: str, from_number: str) -> str:
         return f"🎤 **Trascrizione**\n\n{transcript}"
 
 
-def get_or_create_paziente(from_number: str) -> int | None:
+def _normalize_phone(phone: str | None) -> str:
+    value = (phone or "").strip()
+    if value.lower().startswith("whatsapp:"):
+        value = value.split(":", 1)[1].strip()
+    return value
+
+
+def _resolve_medico_id_by_twilio_number(to_number: str | None) -> str | None:
+    """
+    Prova a risolvere `medici.id` in base al numero Twilio destinatario del webhook.
+    Gestisce schemi diversi tentando più colonne candidate.
+    """
+    if not supabase:
+        return None
+    twilio_number = _normalize_phone(to_number)
+    if not twilio_number:
+        return None
+
+    candidate_columns = [
+        "telefono",
+        "numero_whatsapp",
+        "whatsapp_number",
+        "twilio_number",
+        "numero_twilio",
+    ]
+    for col in candidate_columns:
+        try:
+            lookup = (
+                supabase.table("medici")
+                .select("id")
+                .eq(col, twilio_number)
+                .limit(1)
+                .execute()
+            )
+            if lookup.data:
+                mid = str(lookup.data[0]["id"])
+                print(
+                    f"[DB] Medico risolto da tabella medici: id={mid} via colonna `{col}`",
+                    flush=True,
+                )
+                return mid
+        except Exception as e:
+            # Colonna non presente o tabella diversa: tentiamo la successiva.
+            print(f"[DB] Lookup medici su `{col}` non riuscito: {e}", flush=True)
+            continue
+    return None
+
+
+def get_or_create_paziente(
+    from_number: str, fallback_medico_id: str | None = None
+) -> tuple[str | None, str | None]:
     if not supabase:
         print("ERRORE: Supabase non configurato (SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY).", flush=True)
-        return None
+        return None, None
 
     try:
         print("[DB] Ricerca paziente per telefono…", flush=True)
         existing = (
             supabase.table("pazienti")
-            .select("id")
+            .select("id, medico_id")
             .eq("telefono", from_number)
             .limit(1)
             .execute()
         )
         if existing.data:
             pid = existing.data[0]["id"]
+            medico_id = existing.data[0].get("medico_id")
             print(f"[DB] Paziente esistente id={pid}", flush=True)
-            return pid
+            if not medico_id and fallback_medico_id:
+                try:
+                    print(
+                        f"[DB] Paziente senza medico_id: aggiorno con fallback {fallback_medico_id}",
+                        flush=True,
+                    )
+                    supabase.table("pazienti").update(
+                        {"medico_id": fallback_medico_id}
+                    ).eq("id", pid).execute()
+                    medico_id = fallback_medico_id
+                except Exception as e:
+                    print(f"ERRORE: update medico_id su paziente esistente: {e}", flush=True)
+                    traceback.print_exc()
+            return pid, (str(medico_id) if medico_id else fallback_medico_id)
 
         print("[DB] Nessun paziente: inizio INSERT pazienti…", flush=True)
+        insert_payload: dict[str, str] = {"telefono": from_number}
+        if fallback_medico_id:
+            insert_payload["medico_id"] = fallback_medico_id
         created = (
             supabase.table("pazienti")
-            .insert({"telefono": from_number})
+            .insert(insert_payload)
             .execute()
         )
         if not created.data:
             print("ERRORE: INSERT pazienti senza data in risposta.", flush=True)
-            return None
+            return None, fallback_medico_id
         pid = created.data[0]["id"]
         print(f"[DB] Paziente creato id={pid}", flush=True)
-        return pid
+        medico_id = created.data[0].get("medico_id") if isinstance(created.data[0], dict) else None
+        return pid, (str(medico_id) if medico_id else fallback_medico_id)
     except Exception as e:
         print(f"ERRORE: Supabase get_or_create_paziente: {e}", flush=True)
         traceback.print_exc()
-        return None
+        return None, fallback_medico_id
 
 
 def insert_richiesta(
-    paziente_id: int,
+    paziente_id: str,
+    medico_id: str,
     messaggio_originale: str,
     riassunto_clinico: str | None,
     urgenza: str | None,
@@ -272,7 +341,7 @@ def insert_richiesta(
 
     payload = {
         "paziente_id": paziente_id,
-        "medico_id": "0aec5fee-921d-43bf-87b6-c4019182c742",
+        "medico_id": medico_id,
         "messaggio_originale": messaggio_originale,
         "riassunto_clinico": riassunto_clinico,
         "urgenza": urgenza,
@@ -433,6 +502,22 @@ def _unique_storage_object_name(
     return f"{prefix}_{ts}_{sid_part}{extension}"
 
 
+def _storage_relative_path(
+    bucket: str,
+    from_number: str,
+    content_type: str,
+    content_disposition: str | None,
+    message_sid: str,
+) -> str:
+    """
+    Path relativo da salvare in DB (senza URL):
+    `{telefono_paziente}/{filename}`.
+    """
+    patient_folder = _sanitize_storage_basename(_normalize_phone(from_number) or "paziente_sconosciuto")
+    filename = _unique_storage_object_name(bucket, content_type, content_disposition, message_sid)
+    return f"{patient_folder}/{filename}"
+
+
 def _storage_bucket_for_content_type(content_type: str) -> str:
     """audio/* -> bucket vocali; immagini, PDF e altri allegati -> referti."""
     ct = (content_type or "").strip().lower()
@@ -447,7 +532,7 @@ def upload_bytes_to_supabase_bucket(
     file_bytes: bytes,
     content_type: str,
 ) -> str | None:
-    """Carica su un bucket Storage e restituisce l'URL pubblico (get_public_url)."""
+    """Carica su Storage e restituisce il path relativo (object_path), non un URL pubblico."""
     if not supabase:
         print("ERRORE: Supabase non configurato (SUPABASE_URL/SUPABASE_KEY).")
         return None
@@ -460,7 +545,7 @@ def upload_bytes_to_supabase_bucket(
             file_bytes,
             file_options={"content-type": content_type or "application/octet-stream"},
         )
-        return supabase.storage.from_(bucket).get_public_url(object_path)
+        return object_path
     except Exception as e:
         print(f"ERRORE upload Supabase Storage (bucket={bucket}, path={object_path}): {e}")
         return None
@@ -468,17 +553,18 @@ def upload_bytes_to_supabase_bucket(
 
 def upload_file_bytes_to_storage(
     file_bytes: bytes,
+    from_number: str,
     content_type: str,
     content_disposition: str | None,
     message_sid: str = "",
 ) -> str | None:
     """
-    Sceglie vocali vs referti dal Content-Type, genera un path univoco,
-    carica e restituisce l'URL pubblico da salvare in richieste.url_media.
+    Sceglie vocali vs referti dal Content-Type, genera un path relativo
+    e salva in DB SOLO quel path (bucket separato).
     """
     bucket = _storage_bucket_for_content_type(content_type)
-    object_path = _unique_storage_object_name(
-        bucket, content_type, content_disposition, message_sid
+    object_path = _storage_relative_path(
+        bucket, from_number, content_type, content_disposition, message_sid
     )
     return upload_bytes_to_supabase_bucket(
         bucket, object_path, file_bytes, content_type
@@ -487,6 +573,7 @@ def upload_file_bytes_to_storage(
 
 def process_message(
     from_number: str,
+    to_number: str,
     body: str,
     num_media: int = 0,
     media_url_0: str = "",
@@ -501,6 +588,7 @@ def process_message(
     try:
         _process_message_impl(
             from_number,
+            to_number,
             body,
             num_media,
             media_url_0,
@@ -515,6 +603,7 @@ def process_message(
 
 def _process_message_impl(
     from_number: str,
+    to_number: str,
     body: str,
     num_media: int = 0,
     media_url_0: str = "",
@@ -522,7 +611,7 @@ def _process_message_impl(
     message_sid: str = "",
 ) -> None:
     message_text = body.strip() if body else ""
-    uploaded_media_url = None
+    uploaded_media_path = None
     media_url_clean = (media_url_0 or "").strip()
 
     if num_media > 0 and not media_url_clean:
@@ -541,11 +630,14 @@ def _process_message_impl(
             is_audio = ct_resolved.strip().lower().startswith("audio/")
 
             if is_audio:
-                uploaded_media_url = upload_file_bytes_to_storage(
-                    file_bytes, ct_resolved, dl_cd, message_sid
+                uploaded_media_path = upload_file_bytes_to_storage(
+                    file_bytes, from_number, ct_resolved, dl_cd, message_sid
                 )
-                if uploaded_media_url:
-                    print(f"AUDIO CARICATO SU SUPABASE (bucket vocali): {uploaded_media_url}")
+                if uploaded_media_path:
+                    print(
+                        f"AUDIO CARICATO SU SUPABASE (bucket vocali), path={uploaded_media_path}",
+                        flush=True,
+                    )
 
                 transcript_text = transcribe_audio_bytes_whisper(
                     file_bytes, media_content_type_0
@@ -557,16 +649,17 @@ def _process_message_impl(
             else:
                 if not message_text:
                     message_text = "[Allegato Multimediale]"
-                object_path = _unique_storage_object_name(
-                    "referti", ct_resolved, dl_cd, message_sid
-                )
                 try:
-                    uploaded_media_url = upload_bytes_to_supabase_bucket(
+                    object_path = _storage_relative_path(
+                        "referti", from_number, ct_resolved, dl_cd, message_sid
+                    )
+                    uploaded_media_path = upload_bytes_to_supabase_bucket(
                         "referti", object_path, file_bytes, ct_resolved
                     )
-                    if uploaded_media_url:
+                    if uploaded_media_path:
                         print(
-                            f"REFERTO CARICATO SU SUPABASE (bucket referti): {uploaded_media_url}"
+                            f"REFERTO CARICATO SU SUPABASE (bucket referti), path={uploaded_media_path}",
+                            flush=True,
                         )
                     else:
                         print(
@@ -581,18 +674,26 @@ def _process_message_impl(
     print("ESTRAZIONE GPT-4O-MINI (JSON)", flush=True)
     print(json.dumps(extracted, indent=2), flush=True)
 
-    print("[DB] Inizio get_or_create_paziente + insert_richiesta…", flush=True)
-    paziente_id = get_or_create_paziente(from_number)
+    print("[DB] Inizio risoluzione medico + get_or_create_paziente + insert_richiesta…", flush=True)
+    fallback_medico_id = _resolve_medico_id_by_twilio_number(to_number)
+    paziente_id, medico_id = get_or_create_paziente(from_number, fallback_medico_id)
     if paziente_id is None:
         print("ERRORE: impossibile trovare/creare il paziente su Supabase.", flush=True)
+        return
+    if not medico_id:
+        print(
+            "ERRORE: medico_id non risolto. Associa il paziente a un medico o configura tabella medici/numero Twilio.",
+            flush=True,
+        )
         return
 
     insert_richiesta(
         paziente_id=paziente_id,
+        medico_id=medico_id,
         messaggio_originale=message_text,
         riassunto_clinico=extracted.get("riassunto_clinico"),
         urgenza=extracted.get("urgenza_db"),
-        url_media=uploaded_media_url,
+        url_media=uploaded_media_path,
     )
     print("[DB] Flusso salvataggio richieste terminato.", flush=True)
 
@@ -600,6 +701,7 @@ def _process_message_impl(
 @app.post("/webhook")
 def twilio_webhook(
     From: str = Form(...),
+    To: str = Form(default=""),
     Body: str = Form(default=""),
     NumMedia: int = Form(default=0),
     MediaUrl0: str = Form(default=""),
@@ -615,6 +717,7 @@ def twilio_webhook(
     print("TWILIO WEBHOOK — NUOVO MESSAGGIO", flush=True)
     print(separator, flush=True)
     print(f"  Mittente (From): {From}", flush=True)
+    print(f"  Destinatario (To): {To}", flush=True)
     print(f"  Messaggio (Body): {Body}", flush=True)
     print(f"  NumMedia: {NumMedia}", flush=True)
     if NumMedia > 0:
@@ -626,6 +729,7 @@ def twilio_webhook(
 
     process_message(
         From,
+        To,
         Body,
         NumMedia,
         MediaUrl0,

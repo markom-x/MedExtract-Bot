@@ -1,10 +1,11 @@
 "use client";
 
-import { FileText, Sparkles } from "lucide-react";
+import { Sparkles } from "lucide-react";
 
+import { SignedPatientMedia } from "@/components/dashboard/signed-patient-media";
 import { latestClinicalSummary } from "@/lib/dashboard/aggregate";
 import { formatCreatedAt } from "@/lib/dashboard/format";
-import { urlLooksLikeAudio, urlLooksLikePdf } from "@/lib/dashboard/media";
+import { urlLooksLikeAudio } from "@/lib/dashboard/media";
 import type { RichiestaRow } from "@/lib/dashboard/types";
 import { cn } from "@/lib/utils";
 
@@ -133,31 +134,11 @@ export function RecapSection({
                   </p>
                 </div>
                 <div className="p-3">
-                  {urlLooksLikeAudio(url) ? (
-                    <audio
-                      controls
-                      className="mt-1 w-full"
-                      src={url}
-                      preload="metadata"
-                    />
-                  ) : urlLooksLikePdf(url) ? (
-                    <a
-                      href={url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-base font-medium text-blue-700 underline-offset-2 hover:underline"
-                    >
-                      <FileText className="size-4 shrink-0 text-blue-600" />
-                      Apri PDF
-                    </a>
-                  ) : (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={url}
-                      alt=""
-                      className="max-h-48 w-full rounded-lg object-contain"
-                    />
-                  )}
+                  <SignedPatientMedia
+                    key={`${url}-${i}`}
+                    storagePath={url}
+                    layout="recap"
+                  />
                   {msg.trim() ? (
                     <p className="mt-2 line-clamp-3 text-sm leading-snug text-slate-700">
                       {msg}

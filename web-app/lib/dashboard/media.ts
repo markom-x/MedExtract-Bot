@@ -19,8 +19,10 @@ export function urlLooksLikePdf(url: string | null | undefined): boolean {
 export function urlLooksLikeAudio(url: string | null | undefined): boolean {
   if (!url) return false;
   const lower = url.toLowerCase();
-  /** Bucket Supabase per i vocali Twilio: l'URL contiene il segmento `vocali`. */
+  /** Legacy: URL pubblici col segmento `vocali`; path relativi Twilio: prefisso file. */
   if (lower.includes("vocali")) return true;
+  const leaf = lower.split("/").pop() ?? lower;
+  if (leaf.startsWith("vocale_whatsapp")) return true;
   const base = url.split("?")[0]?.split("#")[0]?.toLowerCase() ?? "";
   return AUDIO_EXTENSIONS.some((ext) => base.endsWith(ext));
 }

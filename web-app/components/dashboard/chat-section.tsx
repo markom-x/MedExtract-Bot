@@ -9,6 +9,7 @@ import {
   bubbleMessageText,
   isAllegatoMultimedialePlaceholder,
 } from "@/lib/dashboard/message-text";
+import { SignedPatientMedia } from "@/components/dashboard/signed-patient-media";
 import { urlLooksLikeAudio, urlLooksLikePdf } from "@/lib/dashboard/media";
 import type { RichiestaRow } from "@/lib/dashboard/types";
 import { getSupabaseAuthBrowserClient } from "@/lib/supabase/auth-browser";
@@ -295,11 +296,10 @@ export function ChatSection({
                 </p>
                 {isAudio && u ? (
                   <>
-                    <audio
-                      controls
-                      className="mt-2 w-full"
-                      src={u}
-                      preload="metadata"
+                    <SignedPatientMedia
+                      key={`${messaggio.id}-${u}`}
+                      storagePath={u}
+                      layout="chat"
                     />
                     {text.trim() ? (
                       <p className="mt-2 whitespace-pre-wrap text-slate-900">
@@ -312,22 +312,18 @@ export function ChatSection({
                     {!isAllegatoMultimedialePlaceholder(text) ? (
                       <p className="whitespace-pre-wrap text-slate-900">{text}</p>
                     ) : null}
-                    <a
-                      href={u}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="mt-2 inline-flex text-base font-medium text-blue-700 underline underline-offset-2 hover:text-blue-800"
-                    >
-                      Scarica / apri PDF
-                    </a>
+                    <SignedPatientMedia
+                      key={`${messaggio.id}-${u}`}
+                      storagePath={u}
+                      layout="chat"
+                    />
                   </>
                 ) : isImageOrReferto && u ? (
                   <>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={u}
-                      alt=""
-                      className="mt-2 max-w-xs cursor-pointer rounded-lg object-contain"
+                    <SignedPatientMedia
+                      key={`${messaggio.id}-${u}`}
+                      storagePath={u}
+                      layout="chat"
                     />
                     {showTextBelowImage ? (
                       <p className="mt-2 whitespace-pre-wrap text-slate-900">
