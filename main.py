@@ -29,11 +29,22 @@ openai_api_key = os.getenv("OPENAI_API_KEY")
 openai_client = OpenAI(api_key=openai_api_key) if openai_api_key else None
 
 supabase_url = os.getenv("SUPABASE_URL")
-# Backend-only: OBBLIGATORIO service role per INSERT/Storage (bypass RLS). No anon key.
-supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
+# Solo service role: la chiave anon non bypassa RLS e le INSERT dal webhook fallirebbero.
+supabase_service_role_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+if not supabase_service_role_key and os.getenv("SUPABASE_KEY"):
+    print(
+        "[config] SUPABASE_SERVICE_ROLE_KEY mancante: SUPABASE_KEY non viene usata qui "
+        "(potrebbe essere anon). Imposta SUPABASE_SERVICE_ROLE_KEY su Render/.env.",
+        flush=True,
+    )
 supabase: Client | None = (
-    create_client(supabase_url, supabase_key) if supabase_url and supabase_key else None
+    create_client(supabase_url, supabase_service_role_key)
+    if supabase_url and supabase_service_role_key
+    else None
 )
+
+# Fallback sandbox Twilio (numero To generico non presente in `medici`).
+DEFAULT_MEDICO_ID_SANDBOX = "0aec5fee-921d-43bf-87b6-c4019182c742"
 
 
 def _jwt_role_hint(key: str | None) -> str:
@@ -56,15 +67,17 @@ def _log_startup_config() -> None:
         print("[startup] OpenAI client: OK (chiave presente).", flush=True)
     else:
         print("[startup] OpenAI client: NON configurato (OPENAI_API_KEY).", flush=True)
-    if supabase and supabase_url and supabase_key:
-        role = _jwt_role_hint(supabase_key)
-        src = "SUPABASE_SERVICE_ROLE_KEY" if os.getenv("SUPABASE_SERVICE_ROLE_KEY") else "SUPABASE_KEY"
-        print(f"[startup] Supabase client: OK (URL presente, chiave da {src}).", flush=True)
+    if supabase and supabase_url and supabase_service_role_key:
+        role = _jwt_role_hint(supabase_service_role_key)
+        print(
+            "[startup] Supabase client: OK (SUPABASE_SERVICE_ROLE_KEY presente, bypass RLS).",
+            flush=True,
+        )
         print(f"[startup] JWT role hint (diagnostica): {role}", flush=True)
         if role not in ("service_role",):
             print(
-                "[startup] ATTENZIONE: usa SUPABASE_SERVICE_ROLE_KEY dal pannello Supabase "
-                "(Settings → API → service_role). Con chiave anon le INSERT falliscono per RLS.",
+                "[startup] ATTENZIONE: la chiave non risulta service_role nel JWT — "
+                "verifica di aver copiato la service_role da Supabase (Settings → API).",
                 flush=True,
             )
     else:
@@ -350,10 +363,22 @@ def insert_richiesta(
     try:
         print("[DB] Inizio salvataggio tabella richieste…", flush=True)
         result = supabase.table("richieste").insert(payload).execute()
-        print(f"[DB] Salvataggio richieste completato. Righe: {len(result.data or [])}", flush=True)
+        data = getattr(result, "data", None)
+        if not data:
+            print(
+                f"ERRORE: insert richieste — risposta senza `data` (possibile errore PostgREST): {result!r}",
+                flush=True,
+            )
+            return
+        print(f"[DB] Salvataggio richieste completato. Righe: {len(data)}", flush=True)
         print("SALVATAGGIO SUPABASE OK: nuova richiesta inserita.", flush=True)
     except Exception as e:
-        print(f"ERRORE: Supabase insert_richiesta: {e}", flush=True)
+        print(f"ERRORE: insert richieste — {type(e).__name__}: {e}", flush=True)
+        for attr in ("message", "details", "hint", "code"):
+            if hasattr(e, attr):
+                val = getattr(e, attr)
+                if val is not None and str(val).strip():
+                    print(f"ERRORE:   {attr} = {val!r}", flush=True)
         traceback.print_exc()
 
 
@@ -675,17 +700,26 @@ def _process_message_impl(
     print(json.dumps(extracted, indent=2), flush=True)
 
     print("[DB] Inizio risoluzione medico + get_or_create_paziente + insert_richiesta…", flush=True)
-    fallback_medico_id = _resolve_medico_id_by_twilio_number(to_number)
+    resolved_medico = _resolve_medico_id_by_twilio_number(to_number)
+    if resolved_medico:
+        fallback_medico_id = resolved_medico
+    else:
+        fallback_medico_id = DEFAULT_MEDICO_ID_SANDBOX
+        print(
+            "[DB] Lookup medico via To non ha prodotto id (tipico Sandbox Twilio): "
+            f"uso medico_id di default per test {fallback_medico_id}",
+            flush=True,
+        )
     paziente_id, medico_id = get_or_create_paziente(from_number, fallback_medico_id)
     if paziente_id is None:
         print("ERRORE: impossibile trovare/creare il paziente su Supabase.", flush=True)
         return
     if not medico_id:
+        medico_id = fallback_medico_id
         print(
-            "ERRORE: medico_id non risolto. Associa il paziente a un medico o configura tabella medici/numero Twilio.",
+            f"[DB] medico_id assente sul paziente: uso fallback {medico_id}",
             flush=True,
         )
-        return
 
     insert_richiesta(
         paziente_id=paziente_id,
