@@ -240,6 +240,101 @@ def _normalize_phone(phone: str | None) -> str:
     return value
 
 
+def _whatsapp_address(phone: str) -> str:
+    p = phone.strip()
+    if p.lower().startswith("whatsapp:"):
+        return p
+    return f"whatsapp:{p}"
+
+
+def _send_whatsapp_reply(to_number: str, text: str) -> None:
+    """
+    Invia una risposta WhatsApp via Twilio REST API.
+    """
+    sid = os.getenv("TWILIO_ACCOUNT_SID")
+    token = os.getenv("TWILIO_AUTH_TOKEN")
+    from_number = os.getenv("TWILIO_PHONE_NUMBER")
+    if not sid or not token or not from_number:
+        print(
+            "ERRORE: impossibile inviare risposta WhatsApp (TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN/TWILIO_PHONE_NUMBER mancanti).",
+            flush=True,
+        )
+        return
+
+    try:
+        url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"
+        payload = {
+            "From": _whatsapp_address(from_number),
+            "To": _whatsapp_address(to_number),
+            "Body": text,
+        }
+        resp = requests.post(url, data=payload, auth=(sid, token), timeout=20)
+        if resp.status_code >= 400:
+            print(
+                f"ERRORE invio WhatsApp reply Twilio: status={resp.status_code}, body={resp.text}",
+                flush=True,
+            )
+            return
+        print("TWILIO REPLY OK: messaggio inviato al paziente.", flush=True)
+    except Exception as e:
+        print(f"ERRORE invio WhatsApp reply Twilio: {e}", flush=True)
+        traceback.print_exc()
+
+
+def _extract_activation_medico_id(text: str) -> str | None:
+    """
+    Estrae il codice da messaggi tipo:
+    'Attivazione <uuid-medico>'
+    """
+    m = re.match(
+        r"^\s*Attivazione\s+([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})\s*$",
+        text or "",
+        flags=re.IGNORECASE,
+    )
+    return m.group(1) if m else None
+
+
+def _medico_exists(medico_id: str) -> bool:
+    if not supabase:
+        return False
+    try:
+        q = (
+            supabase.table("medici")
+            .select("id")
+            .eq("id", medico_id)
+            .limit(1)
+            .execute()
+        )
+        return bool(q.data)
+    except Exception as e:
+        print(f"ERRORE verifica medico_id su tabella medici: {e}", flush=True)
+        traceback.print_exc()
+        return False
+
+
+def _create_paziente_for_medico(phone: str, medico_id: str) -> tuple[str | None, str | None]:
+    if not supabase:
+        return None, None
+    try:
+        created = (
+            supabase.table("pazienti")
+            .insert({"telefono": phone, "medico_id": medico_id})
+            .select("id, medico_id")
+            .single()
+            .execute()
+        )
+        row = created.data or {}
+        pid = row.get("id")
+        mid = row.get("medico_id")
+        if pid and mid:
+            print(f"[ONBOARDING] Paziente creato: id={pid}, medico_id={mid}", flush=True)
+            return str(pid), str(mid)
+    except Exception as e:
+        print(f"ERRORE onboarding paziente: {e}", flush=True)
+        traceback.print_exc()
+    return None, None
+
+
 def get_paziente_by_phone(from_number: str) -> tuple[str | None, str | None]:
     if not supabase:
         print("ERRORE: Supabase non configurato (SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY).", flush=True)
@@ -685,15 +780,55 @@ def twilio_webhook(
         print(f"  MessageSid: {MessageSid}", flush=True)
     print(f"{separator}\n", flush=True)
 
-    process_message(
-        From,
-        Body,
-        NumMedia,
-        MediaUrl0,
-        MediaContentType0,
-        MessageSid,
-    )
-    print("[webhook] Risposta TwiML 200 (dopo elaborazione completa).", flush=True)
+    from_phone = _normalize_phone(From)
+    paziente_id, medico_id = get_paziente_by_phone(from_phone)
+    if paziente_id and medico_id:
+        process_message(
+            from_phone,
+            Body,
+            NumMedia,
+            MediaUrl0,
+            MediaContentType0,
+            MessageSid,
+        )
+        print("[webhook] Risposta TwiML 200 (routing standard completato).", flush=True)
+        twiml = "<Response></Response>"
+        return Response(content=twiml, media_type="application/xml")
 
+    # Onboarding zero-touch per numeri sconosciuti.
+    activation_medico_id = _extract_activation_medico_id(Body or "")
+    if activation_medico_id and _medico_exists(activation_medico_id):
+        created_pid, created_mid = _create_paziente_for_medico(
+            from_phone, activation_medico_id
+        )
+        if created_pid and created_mid:
+            _send_whatsapp_reply(
+                from_phone,
+                "Benvenuto! Il tuo profilo e' stato collegato con successo al tuo medico. "
+                "Puoi iniziare a inviare le tue richieste.",
+            )
+            print(
+                "[ONBOARDING] Attivazione completata. Messaggio corrente non processato come richiesta clinica.",
+                flush=True,
+            )
+            twiml = "<Response></Response>"
+            return Response(content=twiml, media_type="application/xml")
+
+        print(
+            "ERRORE: onboarding richiesto ma creazione paziente non riuscita.",
+            flush=True,
+        )
+        twiml = "<Response></Response>"
+        return Response(content=twiml, media_type="application/xml")
+
+    _send_whatsapp_reply(
+        from_phone,
+        "Non risulti registrato. Richiedi al tuo medico il link di attivazione per collegarti al sistema.",
+    )
+    print(
+        "[ONBOARDING] Numero non registrato senza codice valido: nessun inserimento su richieste.",
+        flush=True,
+    )
     twiml = "<Response></Response>"
     return Response(content=twiml, media_type="application/xml")
+
