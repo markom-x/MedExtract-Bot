@@ -43,9 +43,6 @@ supabase: Client | None = (
     else None
 )
 
-# Fallback sandbox Twilio (numero To generico non presente in `medici`).
-DEFAULT_MEDICO_ID_SANDBOX = "0aec5fee-921d-43bf-87b6-c4019182c742"
-
 
 def _jwt_role_hint(key: str | None) -> str:
     """Legge il claim `role` dal JWT Supabase senza validare la firma (solo diagnostica log)."""
@@ -243,50 +240,7 @@ def _normalize_phone(phone: str | None) -> str:
     return value
 
 
-def _resolve_medico_id_by_twilio_number(to_number: str | None) -> str | None:
-    """
-    Prova a risolvere `medici.id` in base al numero Twilio destinatario del webhook.
-    Gestisce schemi diversi tentando più colonne candidate.
-    """
-    if not supabase:
-        return None
-    twilio_number = _normalize_phone(to_number)
-    if not twilio_number:
-        return None
-
-    candidate_columns = [
-        "telefono",
-        "numero_whatsapp",
-        "whatsapp_number",
-        "twilio_number",
-        "numero_twilio",
-    ]
-    for col in candidate_columns:
-        try:
-            lookup = (
-                supabase.table("medici")
-                .select("id")
-                .eq(col, twilio_number)
-                .limit(1)
-                .execute()
-            )
-            if lookup.data:
-                mid = str(lookup.data[0]["id"])
-                print(
-                    f"[DB] Medico risolto da tabella medici: id={mid} via colonna `{col}`",
-                    flush=True,
-                )
-                return mid
-        except Exception as e:
-            # Colonna non presente o tabella diversa: tentiamo la successiva.
-            print(f"[DB] Lookup medici su `{col}` non riuscito: {e}", flush=True)
-            continue
-    return None
-
-
-def get_or_create_paziente(
-    from_number: str, fallback_medico_id: str | None = None
-) -> tuple[str | None, str | None]:
+def get_paziente_by_phone(from_number: str) -> tuple[str | None, str | None]:
     if not supabase:
         print("ERRORE: Supabase non configurato (SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY).", flush=True)
         return None, None
@@ -304,41 +258,17 @@ def get_or_create_paziente(
             pid = existing.data[0]["id"]
             medico_id = existing.data[0].get("medico_id")
             print(f"[DB] Paziente esistente id={pid}", flush=True)
-            if not medico_id and fallback_medico_id:
-                try:
-                    print(
-                        f"[DB] Paziente senza medico_id: aggiorno con fallback {fallback_medico_id}",
-                        flush=True,
-                    )
-                    supabase.table("pazienti").update(
-                        {"medico_id": fallback_medico_id}
-                    ).eq("id", pid).execute()
-                    medico_id = fallback_medico_id
-                except Exception as e:
-                    print(f"ERRORE: update medico_id su paziente esistente: {e}", flush=True)
-                    traceback.print_exc()
-            return pid, (str(medico_id) if medico_id else fallback_medico_id)
+            return str(pid), (str(medico_id) if medico_id else None)
 
-        print("[DB] Nessun paziente: inizio INSERT pazienti…", flush=True)
-        insert_payload: dict[str, str] = {"telefono": from_number}
-        if fallback_medico_id:
-            insert_payload["medico_id"] = fallback_medico_id
-        created = (
-            supabase.table("pazienti")
-            .insert(insert_payload)
-            .execute()
+        print(
+            f"WARNING: numero sconosciuto {from_number}. Nessun paziente trovato, salto inserimento richieste.",
+            flush=True,
         )
-        if not created.data:
-            print("ERRORE: INSERT pazienti senza data in risposta.", flush=True)
-            return None, fallback_medico_id
-        pid = created.data[0]["id"]
-        print(f"[DB] Paziente creato id={pid}", flush=True)
-        medico_id = created.data[0].get("medico_id") if isinstance(created.data[0], dict) else None
-        return pid, (str(medico_id) if medico_id else fallback_medico_id)
+        return None, None
     except Exception as e:
-        print(f"ERRORE: Supabase get_or_create_paziente: {e}", flush=True)
+        print(f"ERRORE: Supabase get_paziente_by_phone: {e}", flush=True)
         traceback.print_exc()
-        return None, fallback_medico_id
+        return None, None
 
 
 def insert_richiesta(
@@ -599,7 +529,6 @@ def upload_file_bytes_to_storage(
 
 def process_message(
     from_number: str,
-    to_number: str,
     body: str,
     num_media: int = 0,
     media_url_0: str = "",
@@ -614,7 +543,6 @@ def process_message(
     try:
         _process_message_impl(
             from_number,
-            to_number,
             body,
             num_media,
             media_url_0,
@@ -629,7 +557,6 @@ def process_message(
 
 def _process_message_impl(
     from_number: str,
-    to_number: str,
     body: str,
     num_media: int = 0,
     media_url_0: str = "",
@@ -639,6 +566,22 @@ def _process_message_impl(
     message_text = body.strip() if body else ""
     uploaded_media_path = None
     media_url_clean = (media_url_0 or "").strip()
+    from_phone = _normalize_phone(from_number)
+
+    # Multi-tenant routing: il numero mittente deve esistere in `pazienti`.
+    paziente_id, medico_id = get_paziente_by_phone(from_phone)
+    if paziente_id is None:
+        print(
+            f"[ROUTING] Mittente non censito ({from_phone}). Elaborazione terminata senza INSERT.",
+            flush=True,
+        )
+        return
+    if not medico_id:
+        print(
+            f"WARNING: paziente {paziente_id} senza medico_id associato. Salto inserimento richieste.",
+            flush=True,
+        )
+        return
 
     if num_media > 0 and not media_url_clean:
         print(
@@ -657,7 +600,7 @@ def _process_message_impl(
 
             if is_audio:
                 uploaded_media_path = upload_file_bytes_to_storage(
-                    file_bytes, from_number, ct_resolved, dl_cd, message_sid
+                    file_bytes, from_phone, ct_resolved, dl_cd, message_sid
                 )
                 if uploaded_media_path:
                     print(
@@ -677,7 +620,7 @@ def _process_message_impl(
                     message_text = "[Allegato Multimediale]"
                 try:
                     object_path = _storage_relative_path(
-                        "referti", from_number, ct_resolved, dl_cd, message_sid
+                        "referti", from_phone, ct_resolved, dl_cd, message_sid
                     )
                     uploaded_media_path = upload_bytes_to_supabase_bucket(
                         "referti", object_path, file_bytes, ct_resolved
@@ -700,27 +643,7 @@ def _process_message_impl(
     print("ESTRAZIONE GPT-4O-MINI (JSON)", flush=True)
     print(json.dumps(extracted, indent=2), flush=True)
 
-    print("[DB] Inizio risoluzione medico + get_or_create_paziente + insert_richiesta…", flush=True)
-    resolved_medico = _resolve_medico_id_by_twilio_number(to_number)
-    if resolved_medico:
-        fallback_medico_id = resolved_medico
-    else:
-        fallback_medico_id = DEFAULT_MEDICO_ID_SANDBOX
-        print(
-            "[DB] Lookup medico via To non ha prodotto id (tipico Sandbox Twilio): "
-            f"uso medico_id di default per test {fallback_medico_id}",
-            flush=True,
-        )
-    paziente_id, medico_id = get_or_create_paziente(from_number, fallback_medico_id)
-    if paziente_id is None:
-        print("ERRORE: impossibile trovare/creare il paziente su Supabase.", flush=True)
-        return
-    if not medico_id:
-        medico_id = fallback_medico_id
-        print(
-            f"[DB] medico_id assente sul paziente: uso fallback {medico_id}",
-            flush=True,
-        )
+    print("[DB] Inizio insert_richiesta con paziente/medico da record paziente…", flush=True)
 
     insert_richiesta(
         paziente_id=paziente_id,
@@ -764,7 +687,6 @@ def twilio_webhook(
 
     process_message(
         From,
-        To,
         Body,
         NumMedia,
         MediaUrl0,
