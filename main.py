@@ -287,6 +287,40 @@ def _send_whatsapp_reply(to_number: str, text: str) -> None:
         traceback.print_exc()
 
 
+def _send_whatsapp_template(to_number: str, content_sid: str) -> None:
+    """
+    Invia un template WhatsApp approvato (Twilio Content Template).
+    """
+    sid = os.getenv("TWILIO_ACCOUNT_SID")
+    token = os.getenv("TWILIO_AUTH_TOKEN")
+    from_number = os.getenv("TWILIO_PHONE_NUMBER")
+    if not sid or not token or not from_number:
+        print(
+            "ERRORE: impossibile inviare template WhatsApp (TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN/TWILIO_PHONE_NUMBER mancanti).",
+            flush=True,
+        )
+        return
+
+    try:
+        url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"
+        payload = {
+            "From": _whatsapp_address(from_number),
+            "To": _whatsapp_address(to_number),
+            "ContentSid": content_sid,
+        }
+        resp = requests.post(url, data=payload, auth=(sid, token), timeout=20)
+        if resp.status_code >= 400:
+            print(
+                f"ERRORE invio WhatsApp template Twilio: status={resp.status_code}, body={resp.text}",
+                flush=True,
+            )
+            return
+        print("TWILIO TEMPLATE OK: template GDPR inviato al paziente.", flush=True)
+    except Exception as e:
+        print(f"ERRORE invio WhatsApp template Twilio: {e}", flush=True)
+        traceback.print_exc()
+
+
 def _extract_activation_medico_id(text: str) -> str | None:
     """
     Estrae il codice da messaggi tipo:
@@ -332,7 +366,7 @@ def _create_paziente_for_medico(phone: str, medico_id: str) -> tuple[str | None,
     if not supabase:
         return None, None
     try:
-        payload = {"telefono": phone, "medico_id": medico_id}
+        payload = {"telefono": phone, "medico_id": medico_id, "gdpr_consent": False}
         try:
             created = (
                 supabase.table("pazienti")
@@ -347,6 +381,7 @@ def _create_paziente_for_medico(phone: str, medico_id: str) -> tuple[str | None,
                 "telefono": phone,
                 "medico_id": medico_id,
                 "nome": "Paziente WhatsApp",
+                "gdpr_consent": False,
             }
             created = (
                 supabase.table("pazienti")
@@ -366,6 +401,68 @@ def _create_paziente_for_medico(phone: str, medico_id: str) -> tuple[str | None,
     return None, None
 
 
+def get_or_create_paziente_with_consent(
+    from_number: str,
+) -> tuple[str | None, str | None, bool]:
+    if not supabase:
+        print("ERRORE: Supabase non configurato (SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY).", flush=True)
+        return None, None, False
+
+    try:
+        existing = (
+            supabase.table("pazienti")
+            .select("id, medico_id, gdpr_consent")
+            .eq("telefono", from_number)
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            row = existing.data[0]
+            pid = row.get("id")
+            medico_id = row.get("medico_id")
+            gdpr_consent = bool(row.get("gdpr_consent"))
+            return str(pid), (str(medico_id) if medico_id else None), gdpr_consent
+
+        payload = {"telefono": from_number, "gdpr_consent": False}
+        try:
+            created = supabase.table("pazienti").insert(payload).execute()
+        except Exception:
+            payload_with_default_name = {
+                "telefono": from_number,
+                "nome": "Paziente WhatsApp",
+                "gdpr_consent": False,
+            }
+            created = supabase.table("pazienti").insert(payload_with_default_name).execute()
+
+        if created.data:
+            row = created.data[0]
+            pid = row.get("id")
+            medico_id = row.get("medico_id")
+            print(f"[GDPR] Nuovo paziente creato per consenso: id={pid}", flush=True)
+            return str(pid), (str(medico_id) if medico_id else None), False
+    except Exception as e:
+        print(f"ERRORE: get_or_create_paziente_with_consent: {type(e).__name__}: {e}", flush=True)
+        traceback.print_exc()
+    return None, None, False
+
+
+def set_paziente_gdpr_consent(paziente_id: str, consent_value: bool) -> bool:
+    if not supabase:
+        return False
+    try:
+        result = (
+            supabase.table("pazienti")
+            .update({"gdpr_consent": consent_value})
+            .eq("id", paziente_id)
+            .execute()
+        )
+        return bool(getattr(result, "data", None))
+    except Exception as e:
+        print(f"ERRORE update gdpr_consent paziente={paziente_id}: {e}", flush=True)
+        traceback.print_exc()
+        return False
+
+
 def get_paziente_by_phone(from_number: str) -> tuple[str | None, str | None]:
     if not supabase:
         print("ERRORE: Supabase non configurato (SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY).", flush=True)
@@ -375,7 +472,7 @@ def get_paziente_by_phone(from_number: str) -> tuple[str | None, str | None]:
         print("[DB] Ricerca paziente per telefono…", flush=True)
         existing = (
             supabase.table("pazienti")
-            .select("id, medico_id")
+            .select("id, medico_id, gdpr_consent")
             .eq("telefono", from_number)
             .limit(1)
             .execute()
@@ -812,23 +909,11 @@ def twilio_webhook(
     print(f"{separator}\n", flush=True)
 
     from_phone = _normalize_phone(From)
-    paziente_id, medico_id = get_paziente_by_phone(from_phone)
-    if paziente_id and medico_id:
-        process_message(
-            from_phone,
-            Body,
-            NumMedia,
-            MediaUrl0,
-            MediaContentType0,
-            MessageSid,
-        )
-        print("[webhook] Risposta TwiML 200 (routing standard completato).", flush=True)
-        twiml = "<Response></Response>"
-        return Response(content=twiml, media_type="application/xml")
-
-    # Onboarding zero-touch per numeri sconosciuti.
     incoming_text = (Body or "").strip()
-    if incoming_text.lower().startswith("attivazione"):
+
+    # Onboarding opzionale con codice medico (prima del gating GDPR).
+    paziente_id, _ = get_paziente_by_phone(from_phone)
+    if paziente_id is None and incoming_text.lower().startswith("attivazione"):
         activation_medico_id = _extract_activation_medico_id(incoming_text)
         if not activation_medico_id or not _is_valid_uuid(activation_medico_id):
             print(
@@ -858,36 +943,75 @@ def twilio_webhook(
             from_phone, activation_medico_id
         )
         if created_pid and created_mid:
+            print(
+                "[ONBOARDING] Attivazione completata. Si passa al controllo GDPR.",
+                flush=True,
+            )
+        else:
+            print(
+                "ERRORE: onboarding richiesto ma creazione paziente non riuscita.",
+                flush=True,
+            )
             _send_whatsapp_reply(
                 from_phone,
-                "Benvenuto! Il tuo profilo e' stato collegato con successo al tuo medico.",
-            )
-            print(
-                "[ONBOARDING] Attivazione completata. Messaggio corrente non processato come richiesta clinica.",
-                flush=True,
+                "Errore durante l'attivazione. Verifica che il codice sia corretto o contatta il medico.",
             )
             twiml = "<Response></Response>"
             return Response(content=twiml, media_type="application/xml")
 
-        print(
-            "ERRORE: onboarding richiesto ma creazione paziente non riuscita.",
-            flush=True,
-        )
+    paziente_id, medico_id, gdpr_consent = get_or_create_paziente_with_consent(from_phone)
+    if not paziente_id:
         _send_whatsapp_reply(
             from_phone,
-            "Errore durante l'attivazione. Verifica che il codice sia corretto o contatta il medico.",
+            "Errore temporaneo. Riprova tra poco o contatta il tuo medico.",
         )
         twiml = "<Response></Response>"
         return Response(content=twiml, media_type="application/xml")
 
-    _send_whatsapp_reply(
+    if not gdpr_consent:
+        if incoming_text.lower() == "accetto":
+            updated = set_paziente_gdpr_consent(paziente_id, True)
+            if updated:
+                _send_whatsapp_reply(
+                    from_phone,
+                    "Grazie! Ora puoi scrivermi i tuoi sintomi.",
+                )
+            else:
+                _send_whatsapp_reply(
+                    from_phone,
+                    "Errore durante la registrazione del consenso. Riprova.",
+                )
+            twiml = "<Response></Response>"
+            return Response(content=twiml, media_type="application/xml")
+
+        _send_whatsapp_template(
+            to_number=from_phone,
+            content_sid="IL_TUO_CONTENT_SID_QUI",
+        )
+        print(
+            "[GDPR] Consenso mancante: template inviato e messaggio non processato.",
+            flush=True,
+        )
+        twiml = "<Response></Response>"
+        return Response(content=twiml, media_type="application/xml")
+
+    if not medico_id:
+        _send_whatsapp_reply(
+            from_phone,
+            "Profilo creato ma non ancora collegato a un medico. Invia il codice di attivazione ricevuto dal tuo medico.",
+        )
+        twiml = "<Response></Response>"
+        return Response(content=twiml, media_type="application/xml")
+
+    process_message(
         from_phone,
-        "Non risulti registrato. Richiedi al tuo medico il link di attivazione per collegarti al sistema.",
+        Body,
+        NumMedia,
+        MediaUrl0,
+        MediaContentType0,
+        MessageSid,
     )
-    print(
-        "[ONBOARDING] Numero non registrato senza codice valido: nessun inserimento su richieste.",
-        flush=True,
-    )
+    print("[webhook] Risposta TwiML 200 (routing standard completato).", flush=True)
     twiml = "<Response></Response>"
     return Response(content=twiml, media_type="application/xml")
 
