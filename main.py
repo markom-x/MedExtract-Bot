@@ -16,6 +16,7 @@ from fastapi import FastAPI, Form
 from fastapi.responses import Response
 from openai import OpenAI
 from supabase import Client, create_client
+from twilio.rest import Client as TwilioClient
 
 app = FastAPI(
     title="WhatsApp Twilio Webhook",
@@ -302,20 +303,19 @@ def _send_whatsapp_template(to_number: str, content_sid: str) -> None:
         return
 
     try:
-        url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"
-        payload = {
-            "From": _whatsapp_address(from_number),
-            "To": _whatsapp_address(to_number),
-            "ContentSid": content_sid,
-        }
-        resp = requests.post(url, data=payload, auth=(sid, token), timeout=20)
-        if resp.status_code >= 400:
-            print(
-                f"ERRORE invio WhatsApp template Twilio: status={resp.status_code}, body={resp.text}",
-                flush=True,
-            )
-            return
-        print("TWILIO TEMPLATE OK: template GDPR inviato al paziente.", flush=True)
+        client = TwilioClient(sid, token)
+        sender = _whatsapp_address(to_number)
+        template_sid = content_sid or "INSERISCI_QUI_IL_TUO_HX_SID"
+        message = client.messages.create(
+            content_sid=template_sid,
+            from_=_whatsapp_address(from_number),  # es. whatsapp:+447863789592
+            to=sender,
+            content_variables="{}",
+        )
+        print(
+            f"TWILIO TEMPLATE OK: template GDPR inviato al paziente. sid={message.sid}",
+            flush=True,
+        )
     except Exception as e:
         print(f"ERRORE invio WhatsApp template Twilio: {e}", flush=True)
         traceback.print_exc()
@@ -461,6 +461,61 @@ def set_paziente_gdpr_consent(paziente_id: str, consent_value: bool) -> bool:
         print(f"ERRORE update gdpr_consent paziente={paziente_id}: {e}", flush=True)
         traceback.print_exc()
         return False
+
+
+def link_paziente_to_medico(
+    from_number: str, medico_id: str
+) -> tuple[str | None, str | None, bool]:
+    """
+    Collega (o crea) un paziente al medico e ritorna (paziente_id, medico_id, gdpr_consent).
+    """
+    if not supabase:
+        return None, None, False
+    try:
+        existing = (
+            supabase.table("pazienti")
+            .select("id, gdpr_consent")
+            .eq("telefono", from_number)
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            row = existing.data[0]
+            paziente_id = row.get("id")
+            gdpr_consent = bool(row.get("gdpr_consent"))
+            updated = (
+                supabase.table("pazienti")
+                .update({"medico_id": medico_id})
+                .eq("id", paziente_id)
+                .execute()
+            )
+            if getattr(updated, "data", None):
+                return str(paziente_id), str(medico_id), gdpr_consent
+            return None, None, False
+
+        payload = {
+            "telefono": from_number,
+            "medico_id": medico_id,
+            "gdpr_consent": False,
+        }
+        try:
+            created = supabase.table("pazienti").insert(payload).execute()
+        except Exception:
+            payload_with_default_name = {
+                "telefono": from_number,
+                "medico_id": medico_id,
+                "nome": "Paziente WhatsApp",
+                "gdpr_consent": False,
+            }
+            created = supabase.table("pazienti").insert(payload_with_default_name).execute()
+
+        if created.data:
+            row = created.data[0]
+            return str(row.get("id")), str(row.get("medico_id")), bool(row.get("gdpr_consent"))
+    except Exception as e:
+        print(f"ERRORE link_paziente_to_medico: {type(e).__name__}: {e}", flush=True)
+        traceback.print_exc()
+    return None, None, False
 
 
 def get_paziente_by_phone(from_number: str) -> tuple[str | None, str | None]:
@@ -911,9 +966,8 @@ def twilio_webhook(
     from_phone = _normalize_phone(From)
     incoming_text = (Body or "").strip()
 
-    # Onboarding opzionale con codice medico (prima del gating GDPR).
-    paziente_id, _ = get_paziente_by_phone(from_phone)
-    if paziente_id is None and incoming_text.lower().startswith("attivazione"):
+    # 1) Activation check: collega prima il paziente al medico.
+    if incoming_text.lower().startswith("attivazione"):
         activation_medico_id = _extract_activation_medico_id(incoming_text)
         if not activation_medico_id or not _is_valid_uuid(activation_medico_id):
             print(
@@ -939,17 +993,12 @@ def twilio_webhook(
             twiml = "<Response></Response>"
             return Response(content=twiml, media_type="application/xml")
 
-        created_pid, created_mid = _create_paziente_for_medico(
+        linked_pid, linked_mid, linked_consent = link_paziente_to_medico(
             from_phone, activation_medico_id
         )
-        if created_pid and created_mid:
+        if not linked_pid or not linked_mid:
             print(
-                "[ONBOARDING] Attivazione completata. Si passa al controllo GDPR.",
-                flush=True,
-            )
-        else:
-            print(
-                "ERRORE: onboarding richiesto ma creazione paziente non riuscita.",
+                "ERRORE: attivazione richiesta ma link paziente-medico non riuscito.",
                 flush=True,
             )
             _send_whatsapp_reply(
@@ -959,6 +1008,26 @@ def twilio_webhook(
             twiml = "<Response></Response>"
             return Response(content=twiml, media_type="application/xml")
 
+        if not linked_consent:
+            _send_whatsapp_template(
+                to_number=from_phone,
+                content_sid="HXa9cb1f2bbffe1e2a078daf05ad19a956",
+            )
+            print(
+                "[GDPR] Consenso mancante dopo attivazione: template inviato.",
+                flush=True,
+            )
+            twiml = "<Response></Response>"
+            return Response(content=twiml, media_type="application/xml")
+
+        _send_whatsapp_reply(
+            from_phone,
+            "Attivazione completata",
+        )
+        twiml = "<Response></Response>"
+        return Response(content=twiml, media_type="application/xml")
+
+    # 2) Patient existence/link check (messaggio non di attivazione).
     paziente_id, medico_id, gdpr_consent = get_or_create_paziente_with_consent(from_phone)
     if not paziente_id:
         _send_whatsapp_reply(
@@ -968,6 +1037,15 @@ def twilio_webhook(
         twiml = "<Response></Response>"
         return Response(content=twiml, media_type="application/xml")
 
+    if not medico_id:
+        _send_whatsapp_reply(
+            from_phone,
+            "Benvenuto in MedFlow! Per iniziare, inviami il codice di attivazione che ti ha fornito il tuo medico.",
+        )
+        twiml = "<Response></Response>"
+        return Response(content=twiml, media_type="application/xml")
+
+    # 3) GDPR check.
     if not gdpr_consent:
         if incoming_text.lower() == "accetto":
             updated = set_paziente_gdpr_consent(paziente_id, True)
@@ -986,7 +1064,7 @@ def twilio_webhook(
 
         _send_whatsapp_template(
             to_number=from_phone,
-            content_sid="IL_TUO_CONTENT_SID_QUI",
+            content_sid="HXa9cb1f2bbffe1e2a078daf05ad19a956",
         )
         print(
             "[GDPR] Consenso mancante: template inviato e messaggio non processato.",
@@ -995,14 +1073,7 @@ def twilio_webhook(
         twiml = "<Response></Response>"
         return Response(content=twiml, media_type="application/xml")
 
-    if not medico_id:
-        _send_whatsapp_reply(
-            from_phone,
-            "Profilo creato ma non ancora collegato a un medico. Invia il codice di attivazione ricevuto dal tuo medico.",
-        )
-        twiml = "<Response></Response>"
-        return Response(content=twiml, media_type="application/xml")
-
+    # 4) Normal flow.
     process_message(
         from_phone,
         Body,
