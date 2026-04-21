@@ -314,7 +314,6 @@ def _send_whatsapp_template(to_number: str, content_sid: str) -> None:
             content_sid=template_sid,
             from_=_whatsapp_address(from_number),  # es. whatsapp:+447863789592
             to=sender,
-            content_variables="{}",
         )
         print(
             f"TWILIO TEMPLATE OK: template GDPR inviato al paziente. sid={message.sid}",
