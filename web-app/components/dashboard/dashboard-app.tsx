@@ -14,6 +14,7 @@ import {
   type PatientBucket,
 } from "@/lib/dashboard/aggregate";
 import { fetchRichieste } from "@/lib/dashboard/data";
+import { patientDisplayName } from "@/lib/dashboard/format";
 import { getSupabaseAuthBrowserClient } from "@/lib/supabase/auth-browser";
 import { safeStorageFileName } from "@/lib/upload/safe-storage-name";
 import { cn } from "@/lib/utils";
@@ -122,6 +123,42 @@ export function DashboardApp() {
     }
   }
 
+  async function handleRenamePatient(patientId: string, newName: string): Promise<void> {
+    const previousBuckets = buckets;
+    const previousOrderedIds = orderedIds;
+
+    const normalizedName = newName.trim();
+    const optimisticName = normalizedName.length > 0 ? normalizedName : null;
+    const nextBuckets = new Map(previousBuckets);
+    const bucket = nextBuckets.get(patientId);
+    if (bucket) {
+      bucket.profile.nomeRaw = optimisticName;
+      bucket.profile.nomeDisplay = patientDisplayName(
+        optimisticName,
+        bucket.profile.telefono
+      );
+      nextBuckets.set(patientId, bucket);
+    }
+    setBuckets(nextBuckets);
+    setOrderedIds(sortPatientIds(nextBuckets));
+
+    try {
+      const supabase = getSupabaseAuthBrowserClient();
+      const { error } = await supabase
+        .from("pazienti")
+        .update({ nome: normalizedName })
+        .eq("id", patientId);
+      if (error) throw error;
+      toast.success("Nome paziente aggiornato.");
+    } catch (e) {
+      setBuckets(previousBuckets);
+      setOrderedIds(previousOrderedIds);
+      toast.error(
+        e instanceof Error ? e.message : "Errore durante l'aggiornamento del nome."
+      );
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex h-full min-h-0 flex-1 items-center justify-center bg-slate-50 px-4">
@@ -213,6 +250,7 @@ export function DashboardApp() {
             buckets={buckets}
             selectedId={selectedId}
             onSelect={handleSelectPatient}
+            onRenamePatient={handleRenamePatient}
           />
         </div>
       </div>

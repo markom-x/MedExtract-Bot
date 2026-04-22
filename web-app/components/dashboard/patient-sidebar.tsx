@@ -4,12 +4,14 @@ import { cn } from "@/lib/utils";
 import type { PatientBucket } from "@/lib/dashboard/aggregate";
 import { lastMessagePreview } from "@/lib/dashboard/aggregate";
 import { needsAttention } from "@/lib/dashboard/format";
+import { useState } from "react";
 
 type Props = {
   orderedIds: string[];
   buckets: Map<string, PatientBucket>;
   selectedId: string | null;
   onSelect: (id: string) => void;
+  onRenamePatient: (id: string, newName: string) => Promise<void>;
 };
 
 export function PatientSidebar({
@@ -17,7 +19,22 @@ export function PatientSidebar({
   buckets,
   selectedId,
   onSelect,
+  onRenamePatient,
 }: Props) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draftName, setDraftName] = useState("");
+
+  function startEditing(id: string, currentName: string | null) {
+    setEditingId(id);
+    setDraftName(currentName?.trim() ?? "");
+  }
+
+  async function commitEdit(id: string) {
+    const nextName = draftName.trim();
+    setEditingId(null);
+    await onRenamePatient(id, nextName);
+  }
+
   return (
     <aside className="flex h-full min-h-0 w-full shrink-0 flex-col overflow-hidden border-r border-slate-200 bg-white shadow-sm md:w-80 md:min-w-[18rem]">
       <div className="border-b border-slate-200 px-4 py-4 md:px-5 md:py-5">
@@ -58,9 +75,40 @@ export function PatientSidebar({
                       title={alert ? "Richiede attenzione" : "Nessuna azione urgente"}
                     />
                     <div className="min-w-0 flex-1">
-                      <p className="truncate font-semibold text-slate-900">
-                        {profile.nomeDisplay}
-                      </p>
+                      {editingId === id ? (
+                        <input
+                          autoFocus
+                          value={draftName}
+                          onChange={(event) => setDraftName(event.target.value)}
+                          onBlur={() => void commitEdit(id)}
+                          onClick={(event) => event.stopPropagation()}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              void commitEdit(id);
+                            }
+                            if (event.key === "Escape") {
+                              event.preventDefault();
+                              setEditingId(null);
+                              setDraftName("");
+                            }
+                          }}
+                          className="w-full rounded border border-blue-300 bg-white px-2 py-0.5 text-sm font-semibold text-slate-900 outline-none ring-1 ring-blue-200"
+                          placeholder="Nome paziente"
+                          aria-label="Modifica nome paziente"
+                        />
+                      ) : (
+                        <p
+                          className="truncate font-semibold text-slate-900"
+                          title="Clicca per modificare il nome"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            startEditing(id, profile.nomeRaw);
+                          }}
+                        >
+                          {profile.nomeDisplay}
+                        </p>
+                      )}
                       <p className="mt-1 line-clamp-2 text-sm leading-snug text-slate-600">
                         {preview}
                       </p>

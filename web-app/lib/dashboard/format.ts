@@ -10,10 +10,10 @@ export function cleanPhone(phone: string | null | undefined): string {
 
 export function patientDisplayName(
   nome: string | null | undefined,
-  phoneClean: string
+  _phoneClean: string
 ): string {
   if (nome?.trim()) return nome.trim();
-  return `Sconosciuto ${phoneClean}`;
+  return "Sconosciuto (clicca per modificare)";
 }
 
 export function formatCreatedAt(value: string | null | undefined): string {
