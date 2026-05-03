@@ -111,3 +111,49 @@
 .chat-bubble-realtime-enter {
   animation: chat-bubble-in 0.35s ease-out forwards;
 }
+
+/* Landing hero — Stripe-like mesh blobs (slow “breathing”, non-distracting) */
+@keyframes hero-mesh-breathe-a {
+  0%,
+  100% {
+    transform: translate(0%, 0%) scale(1);
+  }
+  50% {
+    transform: translate(2.5%, -2%) scale(1.06);
+  }
+}
+
+@keyframes hero-mesh-breathe-b {
+  0%,
+  100% {
+    transform: translate(0%, 0%) scale(1) rotate(0deg);
+  }
+  50% {
+    transform: translate(-2%, 2.5%) scale(1.05) rotate(-2.5deg);
+  }
+}
+
+@keyframes hero-mesh-breathe-c {
+  0%,
+  100% {
+    transform: translate(0%, 0%) scale(1);
+  }
+  33% {
+    transform: translate(1.5%, 2%) scale(0.98);
+  }
+  66% {
+    transform: translate(-2%, -1.5%) scale(1.04);
+  }
+}
+
+@layer utilities {
+  .animate-hero-mesh-a {
+    animation: hero-mesh-breathe-a 22s ease-in-out infinite;
+  }
+  .animate-hero-mesh-b {
+    animation: hero-mesh-breathe-b 26s ease-in-out infinite;
+  }
+  .animate-hero-mesh-c {
+    animation: hero-mesh-breathe-c 30s ease-in-out infinite;
+  }
+}
